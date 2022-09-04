@@ -1,6 +1,7 @@
 package puffin
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -158,7 +159,7 @@ func (c *FuncCmd) CombinedOutput() ([]byte, error) {
 	if c.stderr != nil {
 		return nil, errors.New("exec: Stderr already set")
 	}
-	var b lockableBuf
+	b := lockableBuffer{ReadWriter: &bytes.Buffer{}}
 	c.stdout = &b
 	c.stderr = &b
 	err := c.Run()
@@ -190,19 +191,19 @@ func (c *FuncCmd) Output() ([]byte, error) {
 	if c.stdout != nil {
 		return nil, errors.New("exec: Stdout already set")
 	}
-	var stdout lockableBuf
+	stdout := lockableBuffer{ReadWriter: &bytes.Buffer{}}
 	c.stdout = &stdout
 
 	captureErr := c.stderr == nil
 	if captureErr {
 		// TODO: port prefixSuffixSaver so error messages are the same
-		c.stderr = &lockableBuf{}
+		c.stderr = &lockableBuffer{ReadWriter: &bytes.Buffer{}}
 	}
 
 	err := c.Run()
 	if err != nil && captureErr {
 		if ee, ok := err.(*exec.ExitError); ok {
-			ee.Stderr = c.stderr.(*lockableBuf).Bytes()
+			ee.Stderr = c.stderr.(*lockableBuffer).Bytes()
 		}
 	}
 	return stdout.Bytes(), err
@@ -277,7 +278,7 @@ func (c *FuncCmd) StderrPipe() (io.ReadCloser, error) {
 		return nil, errors.New("exec: StderrPipe after process started")
 	}
 
-	buf := &lockableBuf{}
+	buf := &lockableBuffer{ReadWriter: &bytes.Buffer{}}
 	c.stderr = buf
 	return buf, nil
 }
@@ -291,7 +292,7 @@ func (c *FuncCmd) StdinPipe() (io.WriteCloser, error) {
 		return nil, errors.New("exec: StdinPipe after process started")
 	}
 
-	buf := &lockableBuf{}
+	buf := &lockableBuffer{ReadWriter: &bytes.Buffer{}}
 	c.stderr = buf
 	return buf, nil
 }
@@ -305,7 +306,7 @@ func (c *FuncCmd) StdoutPipe() (io.ReadCloser, error) {
 		return nil, errors.New("exec: StdoutPipe after process started")
 	}
 
-	buf := &lockableBuf{}
+	buf := &lockableBuffer{ReadWriter: &bytes.Buffer{}}
 	c.stderr = buf
 	return buf, nil
 }
@@ -317,7 +318,7 @@ func (c *FuncCmd) String() string {
 		return strings.Join(c.args, " ")
 	}
 	// report the exact executable path (plus args)
-	b := new(strings.Builder)
+	var b strings.Builder
 	b.WriteString(c.path)
 	for _, a := range c.args[1:] {
 		b.WriteByte(' ')
@@ -355,11 +356,11 @@ func (c *FuncCmd) Wait() error {
 	return nil
 }
 
-// lock, prevents further changes to the underlying command
+// lock, prevents further changes to the underlying commands buffers
 func (c *FuncCmd) lock() {
-	c.stdin.(*lockableBuf).lock = true
-	c.stdout.(*lockableBuf).lock = true
-	c.stderr.(*lockableBuf).lock = true
+	c.stdin.(*lockableBuffer).LockRead()
+	c.stdout.(*lockableBuffer).LockWrite()
+	c.stderr.(*lockableBuffer).LockWrite()
 }
 
 // Path returns the Cmd path
@@ -412,41 +413,46 @@ func (c *FuncCmd) SetDir(dir string) {
 
 // Stdin returns the Cmd Stdin
 func (c *FuncCmd) Stdin() io.Reader {
-	if s, ok := c.stdin.(*lockableBuf); ok {
-		return s.read
-	}
 	return c.stdin
 }
 
 // SetStdin sets the Cmd Stdin
 func (c *FuncCmd) SetStdin(stdin io.Reader) {
-	c.stdin = &lockableBuf{read: stdin}
+	c.stdin = &lockableReader{Reader: stdin}
 }
 
 // Stdout returns the Cmd Stdout
 func (c *FuncCmd) Stdout() io.Writer {
-	if s, ok := c.stdout.(*lockableBuf); ok {
-		return s.write
+	if writer, ok := c.stdout.(*lockableWriter); ok {
+		return writer.Writer
 	}
+	if buffer, ok := c.stdout.(*lockableBuffer); ok {
+		return buffer.ReadWriter
+	}
+
 	return c.stdout
 }
 
 // SetStdout sets the Cmd Stdout
 func (c *FuncCmd) SetStdout(stdout io.Writer) {
-	c.stdout = &lockableBuf{write: stdout}
+	c.stdout = &lockableWriter{Writer: stdout}
 }
 
 // Stderr returns the Cmd Stderr
 func (c *FuncCmd) Stderr() io.Writer {
-	if s, ok := c.stderr.(*lockableBuf); ok {
-		return s.write
+	if writer, ok := c.stderr.(*lockableWriter); ok {
+		return writer.Writer
 	}
+	if buffer, ok := c.stderr.(*lockableBuffer); ok {
+		return buffer.ReadWriter
+	}
+
 	return c.stderr
 }
 
 // SetStderr sets the Cmd Stderr
 func (c *FuncCmd) SetStderr(stderr io.Writer) {
-	c.stderr = &lockableBuf{write: stderr}
+	c.stderr = &lockableWriter{Writer: stderr}
 }
 
 // ExtraFiles returns the Cmd extra files
