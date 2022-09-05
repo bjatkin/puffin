@@ -62,7 +62,7 @@ func (e *FuncExec) Command(name string, arg ...string) Cmd {
 		fExec: e,
 	}
 	if filepath.Base(name) == name {
-		lp, err := exec.LookPath(name)
+		lp, err := e.LookPath(name)
 		if lp != "" {
 			cmd.path = lp
 		}
@@ -170,7 +170,7 @@ func (c *FuncCmd) CombinedOutput() ([]byte, error) {
 // as it is currently configured.
 func (c *FuncCmd) Environ() []string {
 	env := c.env
-	if env == nil {
+	if env == nil && c.fExec != nil {
 		return fmtEnv(c.fExec.envs)
 	}
 
