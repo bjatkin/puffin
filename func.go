@@ -58,9 +58,11 @@ func (e *FuncExec) LookPath(file string) (string, error) {
 // running commands
 func (e *FuncExec) Command(name string, arg ...string) Cmd {
 	cmd := &FuncCmd{
-		path:  name,
-		args:  append([]string{name}, arg...),
-		fExec: e,
+		path:     name,
+		args:     append([]string{name}, arg...),
+		ctxErr:   make(chan error, 1),
+		exitCode: make(chan int, 1),
+		fExec:    e,
 	}
 	if filepath.Base(name) == name {
 		lp, err := e.LookPath(name)
@@ -89,6 +91,11 @@ func (e *FuncExec) CommandContext(ctx context.Context, name string, arg ...strin
 
 // findFunc retrives a function and the command name from the func map
 func (e *FuncExec) findFunc(name string) (CmdFunc, string) {
+	// dont even need to check the map if it's nil
+	if e.funcMap == nil {
+		return nil, ""
+	}
+
 	// check if it's a simple member of the map
 	if fn, ok := e.funcMap[name]; ok {
 		return fn, name
@@ -259,16 +266,19 @@ func (c *FuncCmd) Start() error {
 		done <- struct{}{}
 	}()
 
-	// listen for the command to be canceled
-	go func() {
-		select {
-		case <-c.ctx.Done():
-			c.lock()
-			c.ctxErr <- c.ctx.Err()
-		case <-done:
-			return
-		}
-	}()
+	// listen for the command to be canceled if ctx is not nil
+	if c.ctx != nil {
+		go func() {
+			select {
+			case <-c.ctx.Done():
+				c.lock()
+				c.ctxErr <- c.ctx.Err()
+			case <-done:
+				c.ctxErr <- nil
+				return
+			}
+		}()
+	}
 
 	return nil
 }
@@ -344,7 +354,7 @@ func (c *FuncCmd) Wait() error {
 	}
 	c.processState = &os.ProcessState{}
 
-	if c.ctxErr != nil {
+	if c.ctx != nil {
 		interruptErr := <-c.ctxErr
 		if interruptErr != nil {
 			return interruptErr
@@ -352,19 +362,35 @@ func (c *FuncCmd) Wait() error {
 	}
 
 	exitCode := <-c.exitCode
-	if exitCode == 0 {
-		return nil
+	if exitCode != 0 {
+		return fmt.Errorf("exit status %d", exitCode)
 	}
 
-	// TODO: what error do I return here?
 	return nil
 }
 
 // lock, prevents further changes to the underlying commands buffers
 func (c *FuncCmd) lock() {
-	c.stdin.(*lockableBuffer).LockRead()
-	c.stdout.(*lockableBuffer).LockWrite()
-	c.stderr.(*lockableBuffer).LockWrite()
+	if r, ok := c.stdin.(*lockableReader); ok {
+		r.Lock()
+	}
+	if r, ok := c.stdin.(*lockableBuffer); ok {
+		r.LockRead()
+	}
+
+	if w, ok := c.stdout.(*lockableWriter); ok {
+		w.Lock()
+	}
+	if w, ok := c.stdout.(*lockableBuffer); ok {
+		w.LockWrite()
+	}
+
+	if w, ok := c.stderr.(*lockableWriter); ok {
+		w.Lock()
+	}
+	if w, ok := c.stderr.(*lockableBuffer); ok {
+		w.LockWrite()
+	}
 }
 
 // Path returns the Cmd path
