@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -183,6 +184,9 @@ func fmtEnv(env map[string]string) []string {
 	for k, v := range env {
 		fmted = append(fmted, fmt.Sprintf("%s=%s", k, v))
 	}
+
+	sort.Strings(fmted)
+
 	return fmted
 }
 
