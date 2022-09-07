@@ -99,3 +99,9 @@ func (rw *lockableBuffer) Bytes() []byte {
 	p, _ := io.ReadAll(rw.ReadWriter)
 	return p
 }
+
+// String reads the contents out of the buffer and returns it as a string
+func (rw *lockableBuffer) String() string {
+	p, _ := io.ReadAll(rw.ReadWriter)
+	return string(p)
+}
