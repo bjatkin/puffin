@@ -358,12 +358,13 @@ func TestFuncExec_CommandContext(t *testing.T) {
 
 func TestFuncCmd_Start(t *testing.T) {
 	type fields struct {
-		path    string
-		stdout  io.Writer
-		process *os.Process
-		ctx     context.Context
-		err     error
-		fExec   *FuncExec
+		path     string
+		stdout   io.Writer
+		process  *os.Process
+		exitCode chan int
+		ctx      context.Context
+		err      error
+		fExec    *FuncExec
 	}
 	tests := []struct {
 		name    string
@@ -405,7 +406,8 @@ func TestFuncCmd_Start(t *testing.T) {
 		{
 			"run cmd",
 			fields{
-				path: "test",
+				path:     "test",
+				exitCode: make(chan int, 1),
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"test": func(fc *FuncCmd) int {
@@ -422,11 +424,12 @@ func TestFuncCmd_Start(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &FuncCmd{
-				path:    tt.fields.path,
-				stdout:  tt.fields.stdout,
-				process: tt.fields.process,
-				err:     tt.fields.err,
-				fExec:   tt.fields.fExec,
+				path:     tt.fields.path,
+				stdout:   tt.fields.stdout,
+				process:  tt.fields.process,
+				exitCode: tt.fields.exitCode,
+				err:      tt.fields.err,
+				fExec:    tt.fields.fExec,
 			}
 			if err := c.Start(); (err != nil) != tt.wantErr {
 				t.Errorf("FuncCmd.Start() error = %v, wantErr %v", err, tt.wantErr)
@@ -605,12 +608,12 @@ func TestFuncCmd_Run(t *testing.T) {
 				}(),
 				exitCode: make(chan int, 1),
 				ctxErr:   make(chan error, 1),
-				stdout:   &bytes.Buffer{},
+				stdout:   &lockableBuffer{ReadWriter: &bytes.Buffer{}},
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"slow": func(fc *FuncCmd) int {
 							fc.stdout.Write([]byte("test was run"))
-							time.Sleep(time.Second)
+							time.Sleep(time.Millisecond * 10)
 							fc.stdout.Write([]byte("sleep finished"))
 							return 0
 						},
@@ -630,7 +633,7 @@ func TestFuncCmd_Run(t *testing.T) {
 				}(),
 				exitCode: make(chan int, 1),
 				ctxErr:   make(chan error, 1),
-				stdout:   &bytes.Buffer{},
+				stdout:   &lockableBuffer{ReadWriter: &bytes.Buffer{}},
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"fast": func(fc *FuncCmd) int {
@@ -644,6 +647,25 @@ func TestFuncCmd_Run(t *testing.T) {
 				},
 			},
 			false,
+			true,
+		},
+		{
+			"command failed",
+			fields{
+				path:     "test",
+				exitCode: make(chan int, 1),
+				ctxErr:   make(chan error, 1),
+				stdout:   &lockableBuffer{ReadWriter: &bytes.Buffer{}},
+				fExec: &FuncExec{
+					funcMap: map[string]CmdFunc{
+						"test": func(fc *FuncCmd) int {
+							fc.stdout.Write([]byte("test was run"))
+							return 1 // no-zero exit code
+						},
+					},
+				},
+			},
+			true,
 			true,
 		},
 		{
@@ -674,10 +696,509 @@ func TestFuncCmd_Run(t *testing.T) {
 			}
 
 			// check that the function was started
-			gotStdout := c.stdout.(*bytes.Buffer).String()
+			// make sure to wait long enough for the cmd func to finish
+			time.Sleep(time.Millisecond * 10)
+			gotStdout := c.stdout.(*lockableBuffer).String()
 			wantStdout := "test was run"
 			if gotStdout != wantStdout {
 				t.Errorf("FuncCmd.Run() cmd func was not run, got stdout %s but wanted %s", gotStdout, wantStdout)
+			}
+		})
+	}
+}
+
+func TestFuncCmd_CombinedOutput(t *testing.T) {
+	type fields struct {
+		path     string
+		stdout   io.Writer
+		stderr   io.Writer
+		ctxErr   chan error
+		exitCode chan int
+		fExec    *FuncExec
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		want    []byte
+		wantErr bool
+	}{
+		{
+			"with stdout",
+			fields{
+				path:     "test",
+				exitCode: make(chan int, 1),
+				ctxErr:   make(chan error, 1),
+				fExec: &FuncExec{
+					funcMap: map[string]CmdFunc{
+						"test": func(fc *FuncCmd) int {
+							fc.stdout.Write([]byte("test was run"))
+							return 0
+						},
+					},
+				},
+			},
+			[]byte("test was run"),
+			false,
+		},
+		{
+			"with stderr",
+			fields{
+				path:     "test",
+				exitCode: make(chan int, 1),
+				ctxErr:   make(chan error, 1),
+				fExec: &FuncExec{
+					funcMap: map[string]CmdFunc{
+						"test": func(fc *FuncCmd) int {
+							fc.stderr.Write([]byte("test was run"))
+							return 0
+						},
+					},
+				},
+			},
+			[]byte("test was run"),
+			false,
+		},
+		{
+			"both",
+			fields{
+				path:     "test",
+				exitCode: make(chan int, 1),
+				ctxErr:   make(chan error, 1),
+				fExec: &FuncExec{
+					funcMap: map[string]CmdFunc{
+						"test": func(fc *FuncCmd) int {
+							fc.stdout.Write([]byte("test was run"))
+							fc.stderr.Write([]byte("there was an err"))
+							return 0
+						},
+					},
+				},
+			},
+			[]byte("test was runthere was an err"),
+			false,
+		},
+		{
+			"missing command",
+			fields{
+				path:     "test",
+				exitCode: make(chan int, 1),
+				ctxErr:   make(chan error, 1),
+				fExec:    &FuncExec{},
+			},
+			[]byte{},
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &FuncCmd{
+				path:     tt.fields.path,
+				stdout:   tt.fields.stdout,
+				stderr:   tt.fields.stderr,
+				ctxErr:   tt.fields.ctxErr,
+				exitCode: tt.fields.exitCode,
+				fExec:    tt.fields.fExec,
+			}
+			got, err := c.CombinedOutput()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("FuncCmd.CombinedOutput() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("FuncCmd.CombinedOutput() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFuncCmd_Environ(t *testing.T) {
+	type fields struct {
+		env   map[string]string
+		fExec *FuncExec
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   []string
+	}{
+		{
+			"exec environ",
+			fields{
+				fExec: &FuncExec{
+					envs: map[string]string{
+						"TEST":  "true",
+						"DEBUG": "false",
+						"EXEC":  "10",
+					},
+				},
+			},
+			[]string{"DEBUG=false", "EXEC=10", "TEST=true"},
+		},
+		{
+			"cmd environ",
+			fields{
+				env: map[string]string{
+					"TEST":  "false",
+					"DEBUG": "true",
+					"EXEC":  "15",
+				},
+				fExec: &FuncExec{
+					envs: map[string]string{
+						"TEST":  "true",
+						"DEBUG": "false",
+						"EXEC":  "10",
+					},
+				},
+			},
+			[]string{"DEBUG=true", "EXEC=15", "TEST=false"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &FuncCmd{
+				env:   tt.fields.env,
+				fExec: tt.fields.fExec,
+			}
+			if got := c.Environ(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("FuncCmd.Environ() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFuncCmd_Output(t *testing.T) {
+	type fields struct {
+		path     string
+		ctxErr   chan error
+		exitCode chan int
+		fExec    *FuncExec
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		want    []byte
+		wantErr bool
+	}{
+		{
+			"with output",
+			fields{
+				path:     "test",
+				ctxErr:   make(chan error, 1),
+				exitCode: make(chan int, 1),
+				fExec: &FuncExec{
+					funcMap: map[string]CmdFunc{
+						"test": func(fc *FuncCmd) int {
+							fc.stdout.Write([]byte("test was run"))
+							return 0
+						},
+					},
+				},
+			},
+			[]byte("test was run"),
+			false,
+		},
+		{
+			"with std error",
+			fields{
+				path:     "test",
+				ctxErr:   make(chan error, 1),
+				exitCode: make(chan int, 1),
+				fExec: &FuncExec{
+					funcMap: map[string]CmdFunc{
+						"test": func(fc *FuncCmd) int {
+							fc.stderr.Write([]byte("test was run"))
+							return 1
+						},
+					},
+				},
+			},
+			[]byte{},
+			true,
+		},
+		{
+			"missing cmd",
+			fields{
+				path:  "test",
+				fExec: &FuncExec{},
+			},
+			[]byte{},
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &FuncCmd{
+				path:     tt.fields.path,
+				ctxErr:   tt.fields.ctxErr,
+				exitCode: tt.fields.exitCode,
+				fExec:    tt.fields.fExec,
+			}
+			got, err := c.Output()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("FuncCmd.Output() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("FuncCmd.Output() = %v, want %v", string(got), string(tt.want))
+			}
+		})
+	}
+}
+
+func TestFuncCmd_StderrPipe(t *testing.T) {
+	type fields struct {
+		path     string
+		stderr   io.Writer
+		process  *os.Process
+		ctxErr   chan error
+		exitCode chan int
+		fExec    *FuncExec
+	}
+	tests := []struct {
+		name       string
+		fields     fields
+		wantOutput []byte
+		wantErr    bool
+	}{
+		{
+			"stderr already set",
+			fields{
+				stderr: &bytes.Buffer{},
+			},
+			nil,
+			true,
+		},
+		{
+			"process already started",
+			fields{
+				process: &os.Process{},
+			},
+			nil,
+			true,
+		},
+		{
+			"write to stderr",
+			fields{
+				path:     "test",
+				ctxErr:   make(chan error, 1),
+				exitCode: make(chan int, 1),
+				fExec: &FuncExec{
+					funcMap: map[string]CmdFunc{
+						"test": func(fc *FuncCmd) int {
+							fc.stderr.Write([]byte("test was run"))
+							return 0
+						},
+					},
+				},
+			},
+			[]byte("test was run"),
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &FuncCmd{
+				path:     tt.fields.path,
+				stderr:   tt.fields.stderr,
+				process:  tt.fields.process,
+				ctxErr:   tt.fields.ctxErr,
+				exitCode: tt.fields.exitCode,
+				fExec:    tt.fields.fExec,
+			}
+			got, err := c.StderrPipe()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("FuncCmd.StderrPipe() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantOutput == nil {
+				return
+			}
+
+			err = c.Run()
+			if err != nil {
+				t.Errorf("FuncCmd.StderrPipe() filed to run test command %s", err)
+				return
+			}
+
+			gotOutput, err := io.ReadAll(got)
+			if err != nil {
+				t.Errorf("FuncCmd.StderrPipe() failed to read off of buffer %s", err)
+			}
+
+			if !reflect.DeepEqual(gotOutput, tt.wantOutput) {
+				t.Errorf("FuncCmd.StderrPipe() = %v, want %v", string(gotOutput), string(tt.wantOutput))
+			}
+		})
+	}
+}
+
+func TestFuncCmd_StdoutPipe(t *testing.T) {
+	type fields struct {
+		path     string
+		stdout   io.Writer
+		process  *os.Process
+		ctxErr   chan error
+		exitCode chan int
+		fExec    *FuncExec
+	}
+	tests := []struct {
+		name       string
+		fields     fields
+		wantOutput []byte
+		wantErr    bool
+	}{
+		{
+			"stdout already set",
+			fields{
+				stdout: &bytes.Buffer{},
+			},
+			nil,
+			true,
+		},
+		{
+			"process already started",
+			fields{
+				process: &os.Process{},
+			},
+			nil,
+			true,
+		},
+		{
+			"write to stdout",
+			fields{
+				path:     "test",
+				ctxErr:   make(chan error, 1),
+				exitCode: make(chan int, 1),
+				fExec: &FuncExec{
+					funcMap: map[string]CmdFunc{
+						"test": func(fc *FuncCmd) int {
+							fc.stdout.Write([]byte("test was run"))
+							return 0
+						},
+					},
+				},
+			},
+			[]byte("test was run"),
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &FuncCmd{
+				path:     tt.fields.path,
+				stdout:   tt.fields.stdout,
+				process:  tt.fields.process,
+				ctxErr:   tt.fields.ctxErr,
+				exitCode: tt.fields.exitCode,
+				fExec:    tt.fields.fExec,
+			}
+			got, err := c.StdoutPipe()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("FuncCmd.StdoutPipe() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantOutput == nil {
+				return
+			}
+
+			err = c.Run()
+			if err != nil {
+				t.Errorf("FuncCmd.StdoutPipe() filed to run test command %s", err)
+				return
+			}
+
+			gotOutput, err := io.ReadAll(got)
+			if err != nil {
+				t.Errorf("FuncCmd.StdoutPipe() failed to read off of buffer %s", err)
+			}
+
+			if !reflect.DeepEqual(gotOutput, tt.wantOutput) {
+				t.Errorf("FuncCmd.StdoutPipe() = %v, want %v", string(gotOutput), string(tt.wantOutput))
+			}
+		})
+	}
+}
+
+func TestFuncCmd_StdinPipe(t *testing.T) {
+	type fields struct {
+		path     string
+		stdin    io.Reader
+		process  *os.Process
+		ctxErr   chan error
+		exitCode chan int
+		fExec    *FuncExec
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		wantErr bool
+	}{
+		{
+			"stdin was already set",
+			fields{
+				stdin: &bytes.Buffer{},
+			},
+			true,
+		},
+		{
+			"process already started",
+			fields{
+				process: &os.Process{},
+			},
+			true,
+		},
+		{
+			"write to stdin",
+			fields{
+				path:     "test",
+				ctxErr:   make(chan error, 1),
+				exitCode: make(chan int, 1),
+				fExec: &FuncExec{
+					funcMap: map[string]CmdFunc{
+						"test": func(fc *FuncCmd) int {
+							gotInput, err := io.ReadAll(fc.stdin)
+							if err != nil {
+								return 1
+							}
+							if string(gotInput) != "test input" {
+								return 1
+							}
+							return 0
+						},
+					},
+				},
+			},
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &FuncCmd{
+				path:     tt.fields.path,
+				stdin:    tt.fields.stdin,
+				process:  tt.fields.process,
+				ctxErr:   tt.fields.ctxErr,
+				exitCode: tt.fields.exitCode,
+				fExec:    tt.fields.fExec,
+			}
+			got, err := c.StdinPipe()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("FuncCmd.StdinPipe() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				return
+			}
+
+			_, err = got.Write([]byte("test input"))
+			if err != nil {
+				t.Errorf("FuncCmd.StdinPipe() could not write to stdin pipe %s", err)
+				return
+			}
+
+			err = c.Run()
+			if err != nil {
+				t.Errorf("FuncCmd.StdinPipe() test cmd failed")
 			}
 		})
 	}
