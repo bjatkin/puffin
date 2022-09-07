@@ -15,6 +15,7 @@ import (
 	"syscall"
 )
 
+// PidMax is the defaul max on most linux OS
 const PidMax = 32768
 
 // FuncExec is an Exec implementation that uses provided go functions
@@ -240,12 +241,17 @@ func (c *FuncCmd) Start() error {
 	if c.Process() != nil {
 		return errors.New("exec: already started")
 	}
+	if c.exitCode == nil {
+		return errors.New("cmd missing exitCode channel")
+	}
+	if c.ctx != nil && c.ctxErr == nil {
+		return errors.New("cmd missing ctxErr channel")
+	}
 
 	// check if the context is already done
 	if c.ctx != nil {
 		select {
 		case <-c.ctx.Done():
-			c.lock()
 			return c.ctx.Err()
 		default:
 		}
@@ -307,7 +313,7 @@ func (c *FuncCmd) StdinPipe() (io.WriteCloser, error) {
 	}
 
 	buf := &lockableBuffer{ReadWriter: &bytes.Buffer{}}
-	c.stderr = buf
+	c.stdin = buf
 	return buf, nil
 }
 
@@ -321,7 +327,7 @@ func (c *FuncCmd) StdoutPipe() (io.ReadCloser, error) {
 	}
 
 	buf := &lockableBuffer{ReadWriter: &bytes.Buffer{}}
-	c.stderr = buf
+	c.stdout = buf
 	return buf, nil
 }
 
