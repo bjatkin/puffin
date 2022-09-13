@@ -1,7 +1,6 @@
 package puffin
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -150,13 +149,13 @@ type FuncCmd struct {
 	process      *os.Process
 	processState *os.ProcessState
 
-	ctx context.Context
-	err error
-
+	ctx      context.Context
 	ctxErr   chan error
+	err      error
 	startErr error
 	exitCode chan int
-	fExec    *FuncExec
+
+	fExec *FuncExec
 }
 
 // CombinedOutput runs the command function and returns its combined standard
@@ -168,9 +167,9 @@ func (c *FuncCmd) CombinedOutput() ([]byte, error) {
 	if c.stderr != nil {
 		return nil, errors.New("exec: Stderr already set")
 	}
-	b := lockableBuffer{ReadWriter: &bytes.Buffer{}}
-	c.stdout = &b
-	c.stderr = &b
+	b := newLockableBuffer()
+	c.stdout = b
+	c.stderr = b
 	err := c.Run()
 	return b.Bytes(), err
 }
@@ -203,13 +202,13 @@ func (c *FuncCmd) Output() ([]byte, error) {
 	if c.stdout != nil {
 		return nil, errors.New("exec: Stdout already set")
 	}
-	stdout := lockableBuffer{ReadWriter: &bytes.Buffer{}}
-	c.stdout = &stdout
+	stdout := newLockableBuffer()
+	c.stdout = stdout
 
 	captureErr := c.stderr == nil
 	if captureErr {
-		// TODO: port prefixSuffixSaver so error messages are the same
-		c.stderr = &lockableBuffer{ReadWriter: &bytes.Buffer{}}
+		// TODO: port prefixSuffixSaver so error messages are the same as the os/exec package errors
+		c.stderr = newLockableBuffer()
 	}
 
 	err := c.Run()
@@ -281,7 +280,6 @@ func (c *FuncCmd) Start() error {
 				c.ctxErr <- c.ctx.Err()
 			case <-done:
 				c.ctxErr <- nil
-				return
 			}
 		}()
 	}
@@ -298,7 +296,7 @@ func (c *FuncCmd) StderrPipe() (io.ReadCloser, error) {
 		return nil, errors.New("exec: StderrPipe after process started")
 	}
 
-	buf := &lockableBuffer{ReadWriter: &bytes.Buffer{}}
+	buf := newLockableBuffer()
 	c.stderr = buf
 	return buf, nil
 }
@@ -312,7 +310,7 @@ func (c *FuncCmd) StdinPipe() (io.WriteCloser, error) {
 		return nil, errors.New("exec: StdinPipe after process started")
 	}
 
-	buf := &lockableBuffer{ReadWriter: &bytes.Buffer{}}
+	buf := newLockableBuffer()
 	c.stdin = buf
 	return buf, nil
 }
@@ -326,7 +324,7 @@ func (c *FuncCmd) StdoutPipe() (io.ReadCloser, error) {
 		return nil, errors.New("exec: StdoutPipe after process started")
 	}
 
-	buf := &lockableBuffer{ReadWriter: &bytes.Buffer{}}
+	buf := newLockableBuffer()
 	c.stdout = buf
 	return buf, nil
 }
@@ -377,23 +375,14 @@ func (c *FuncCmd) Wait() error {
 
 // lock, prevents further changes to the underlying commands buffers
 func (c *FuncCmd) lock() {
-	if r, ok := c.stdin.(*lockableReader); ok {
-		r.Lock()
-	}
 	if r, ok := c.stdin.(*lockableBuffer); ok {
 		r.LockRead()
 	}
 
-	if w, ok := c.stdout.(*lockableWriter); ok {
-		w.Lock()
-	}
 	if w, ok := c.stdout.(*lockableBuffer); ok {
 		w.LockWrite()
 	}
 
-	if w, ok := c.stderr.(*lockableWriter); ok {
-		w.Lock()
-	}
 	if w, ok := c.stderr.(*lockableBuffer); ok {
 		w.LockWrite()
 	}
@@ -454,16 +443,13 @@ func (c *FuncCmd) Stdin() io.Reader {
 
 // SetStdin sets the Cmd Stdin
 func (c *FuncCmd) SetStdin(stdin io.Reader) {
-	c.stdin = &lockableReader{Reader: stdin}
+	c.stdin = newLockableReader(stdin)
 }
 
 // Stdout returns the Cmd Stdout
 func (c *FuncCmd) Stdout() io.Writer {
-	if writer, ok := c.stdout.(*lockableWriter); ok {
-		return writer.Writer
-	}
-	if buffer, ok := c.stdout.(*lockableBuffer); ok {
-		return buffer.ReadWriter
+	if writer, ok := c.stdout.(*lockableBuffer); ok {
+		return writer.writer
 	}
 
 	return c.stdout
@@ -471,16 +457,13 @@ func (c *FuncCmd) Stdout() io.Writer {
 
 // SetStdout sets the Cmd Stdout
 func (c *FuncCmd) SetStdout(stdout io.Writer) {
-	c.stdout = &lockableWriter{Writer: stdout}
+	c.stdout = newLockableWriter(stdout)
 }
 
 // Stderr returns the Cmd Stderr
 func (c *FuncCmd) Stderr() io.Writer {
-	if writer, ok := c.stderr.(*lockableWriter); ok {
-		return writer.Writer
-	}
-	if buffer, ok := c.stderr.(*lockableBuffer); ok {
-		return buffer.ReadWriter
+	if writer, ok := c.stderr.(*lockableBuffer); ok {
+		return writer.writer
 	}
 
 	return c.stderr
@@ -488,7 +471,7 @@ func (c *FuncCmd) Stderr() io.Writer {
 
 // SetStderr sets the Cmd Stderr
 func (c *FuncCmd) SetStderr(stderr io.Writer) {
-	c.stderr = &lockableWriter{Writer: stderr}
+	c.stderr = newLockableWriter(stderr)
 }
 
 // ExtraFiles returns the Cmd extra files

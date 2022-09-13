@@ -608,7 +608,7 @@ func TestFuncCmd_Run(t *testing.T) {
 				}(),
 				exitCode: make(chan int, 1),
 				ctxErr:   make(chan error, 1),
-				stdout:   &lockableBuffer{ReadWriter: &bytes.Buffer{}},
+				stdout:   newLockableBuffer(),
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"slow": func(fc *FuncCmd) int {
@@ -633,7 +633,7 @@ func TestFuncCmd_Run(t *testing.T) {
 				}(),
 				exitCode: make(chan int, 1),
 				ctxErr:   make(chan error, 1),
-				stdout:   &lockableBuffer{ReadWriter: &bytes.Buffer{}},
+				stdout:   newLockableBuffer(),
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"fast": func(fc *FuncCmd) int {
@@ -655,7 +655,7 @@ func TestFuncCmd_Run(t *testing.T) {
 				path:     "test",
 				exitCode: make(chan int, 1),
 				ctxErr:   make(chan error, 1),
-				stdout:   &lockableBuffer{ReadWriter: &bytes.Buffer{}},
+				stdout:   newLockableBuffer(),
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"test": func(fc *FuncCmd) int {
