@@ -1,5 +1,5 @@
 # Puffin 
-Puffin abstracts the [os/exec go package](https://pkg.go.dev/os/exec).
+Puffin abstracts Go's [os/exec go package](https://pkg.go.dev/os/exec).
 It can be used replace calls to the underlying shell with calls to go functions.
 This can be great for testing or for use cases where a simulated shell would be prefered over a real one.
 
@@ -35,7 +35,7 @@ func branchIsClean() (bool error) {
 }
 ```
 
-This code and be re-written to use Puffin by doing the following.
+This code can be re-written to use Puffin instead of os/exec.
 ```go
 package main
 
@@ -68,14 +68,14 @@ func branchIsClean(exec puffin.Exec) (bool error) {
 A few things to note about this new code.
 1) We've shadowed the exec package name with a `puffin.Exec` argument.
     This ensures that any code that was using the `os/exec` package previously will now use puffin instead.
-2) Previously, thie code was using a global dependency `os/exec`.
-    Now, however, the `puffin.Exec` dependency is being indected into our function.
+2) Previously, this code was using a package dependency `os/exec`.
+    Now, however, the `puffin.Exec` dependency is being injected into the function.
 3) `puffin.Exec` is an interface.
     `puffin.NewOsExec` is one implementation of that interface (there are others as well).
     This specific implementation behaves in the same way as the `os/exec` package.
     This means that while our code has changed, it's behavior has not.
 
-The nice thing about this refactor is now we can test the `branchIsClean` function much more easily.
+The nice thing about this refactor is now we can write unit test for the `branchIsClean` function.
 Take the following code as an example.
 
 ```go
@@ -129,7 +129,43 @@ func Test_branchIsClean(t *testing.T) {
 }
 ```
 
-Notice that this code uses `puffin.NewFuncExec` as it's implementation of the `puffin.Exec` interface.
-This interfaces is a "simulated" shell and uses a `funcMap` that maps command names to go functions.
-This allows exec commands, like `git`, to have consistent, easily configurable behaviors which is great for writing tests around code that uses exec commands.
-Just remember, the point of these tests is to test the behavior of your code surrounding your tests, not the behavior the the commands themselves.
+Notice that this code uses `puffin.NewFuncExec` rather than `puffin.NewOSExec`.
+`puffin.NewFuncExec` also implements the `puffin.Exec` interface and is a "simulated" shell.
+It uses a `funcMap`, that maps command names to go functions, to run fake shell commands.
+This allows exec commands, like `git`, to have consistent, easily configurable behaviors which is great for writing tests around code that includes exec commands.
+Just remember, the point of these tests is to test the behavior of the code surrounding the exec commands, not the behavior the commands themselves.
+
+# The Exec Interface
+The exec interface can be used as a drop in replacement for the `os/exec` package.
+It exposes most of the same functions as that package and can often be used to shadow the `os/exec` package name.
+```go
+import (
+	"os/exec"
+
+	"github.com/bjatkin/puffin"
+)
+
+func example(exec puffin.Exec) {
+	// this now uses puffin rather than the os/exec import
+    exec.Command("new", "command")k
+}
+```
+
+The major differences between `puffin.Exec` and `os/exec` are as follows.
+
+1) `Command` and `CommandContext` return a `puffin.Cmd` rather than an `exec.Cmd`
+2) Puffin does not contain any alternative to the `exec.Error` or the `exec.ExitError` types.
+   in fact, puffin returns `exec.Error` and `exec.ExitError` types wherever possible in an attempt to prevent existing error checking code from being broken.
+
+# The Cmd Interface
+The Cmd interface is the main type provided by puffin.
+It is designed to abstract the [exec.Cmd](https://pkg.go.dev/os/exec#Cmd) type and in many cases is a simple drop in replacement for that type.
+There are a few key differences to be aware of however, mostly dude to the fact that interfaces in to are derived based on behavior only.
+
+1) public fields from `exec.Cmd` including 
+   `Path`, `Args`, `Env`, `Dir`, `Stdin`, `Stdout`, `ExtraFiles`, `SysProcAttr`, `Process`, and `Err`
+   must be accessed using getter and setter methods with `puffin.Exec`.
+   This is because interfaces in Go can not export public fields like structs can.
+2) setting `SysProcAttr`, `Process`, `ProcessState`, and `Err` is not possible on a `puffin.Cmd`
+   the way it is for an `exec.Cmd` as setters for these fields are not included in the interface.
+   This was done to reduce the size of this interface which is already quite large.
