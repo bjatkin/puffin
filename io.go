@@ -1,58 +1,39 @@
 package puffin
 
 import (
+	"bytes"
 	"io"
 )
 
-// lockableWriter is a io.Writer where the write method can be locked
-// to prevent further writing to the buffer
-type lockableWriter struct {
-	io.Writer
-	locked bool
-}
-
-// Write is a passthrough to the underlying io.Write unless the
-// struct is locked, in which case this function becomes a no op
-func (w *lockableWriter) Write(p []byte) (n int, err error) {
-	if w.locked {
-		return len(p), nil
-	}
-	return w.Writer.Write(p)
-}
-
-// Lock locks the writer to prevent future writes to the underlying io.Writer
-func (w *lockableWriter) Lock() {
-	w.locked = true
-}
-
-// lockableReader is an io.Reader where the read method can be locked
-// to prevent further reading from the buffer
-type lockableReader struct {
-	io.Reader
-	locked bool
-}
-
-// Read is a passthrough to the underlying io.Reader unless the
-// struct is locked, in which case this function becomes a no op
-func (r *lockableReader) Read(p []byte) (n int, err error) {
-	if r.locked {
-		return 0, nil
-	}
-
-	return r.Reader.Read(p)
-}
-
-// Lock locks the reader to prevent future reads from the underlying io.Reader
-func (r *lockableReader) Lock() {
-	r.locked = true
-}
-
 // lockableBuff is a io.ReadWriter where the Read and Write methods can be locked
-// to prevent further updates to the underlying buffer
+// to prevent further updates to the underlying buffers
 type lockableBuffer struct {
-	io.ReadWriter
+	reader      io.Reader
+	writer      io.Writer
 	writeLocked bool
 	readLocked  bool
+}
+
+func newLockableBuffer() *lockableBuffer {
+	buf := &bytes.Buffer{}
+	return &lockableBuffer{
+		reader: buf,
+		writer: buf,
+	}
+}
+
+func newLockableReader(reader io.Reader) *lockableBuffer {
+	return &lockableBuffer{
+		reader:      reader,
+		writeLocked: true,
+	}
+}
+
+func newLockableWriter(writer io.Writer) *lockableBuffer {
+	return &lockableBuffer{
+		writer:     writer,
+		readLocked: true,
+	}
 }
 
 // Write is a passthrough to the underlying io.ReadWriter's Write method.
@@ -62,7 +43,7 @@ func (rw *lockableBuffer) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 
-	return rw.ReadWriter.Write(p)
+	return rw.writer.Write(p)
 }
 
 // Read is a passthrough to the underlying io.ReadWriter's Read method.
@@ -72,13 +53,16 @@ func (rw *lockableBuffer) Read(p []byte) (n int, err error) {
 		return 0, nil
 	}
 
-	return rw.ReadWriter.Read(p)
+	return rw.reader.Read(p)
 }
 
-// Close will close the underlying io.ReadWriter if it has a close method as well
+// Close will close the underlying io.Read and io.Writer if it has a close method as well
 // otherwise it's a no-op
 func (rw *lockableBuffer) Close() error {
-	if closer, ok := rw.ReadWriter.(io.Closer); ok {
+	if closer, ok := rw.reader.(io.Closer); ok {
+		return closer.Close()
+	}
+	if closer, ok := rw.writer.(io.Closer); ok {
 		return closer.Close()
 	}
 	return nil
@@ -96,12 +80,20 @@ func (rw *lockableBuffer) LockRead() {
 
 // Bytes reads the contents out of the buffer and returns is as a byte slice
 func (rw *lockableBuffer) Bytes() []byte {
-	p, _ := io.ReadAll(rw.ReadWriter)
+	if rw.reader == nil {
+		return nil
+	}
+
+	p, _ := io.ReadAll(rw.reader)
 	return p
 }
 
 // String reads the contents out of the buffer and returns it as a string
 func (rw *lockableBuffer) String() string {
-	p, _ := io.ReadAll(rw.ReadWriter)
+	if rw.reader == nil {
+		return ""
+	}
+
+	p, _ := io.ReadAll(rw.reader)
 	return string(p)
 }
