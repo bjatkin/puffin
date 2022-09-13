@@ -42,7 +42,7 @@ package main
 import (
     "log"
 
-	"github.com/bjatkin/puffin"
+    "github.com/bjatkin/puffin"
 )
 
 func main() {
@@ -82,9 +82,9 @@ Take the following code as an example.
 package main
 
 import (
-	"testing"
+    "testing"
 
-	"github.com/bjatkin/puffin"
+    "github.com/bjatkin/puffin"
 )
 
 func Test_branchIsClean(t *testing.T) {
@@ -164,7 +164,7 @@ There are a few key differences to be aware of however, mostly dude to the fact 
 
 1) public fields from `exec.Cmd` including 
    `Path`, `Args`, `Env`, `Dir`, `Stdin`, `Stdout`, `ExtraFiles`, `SysProcAttr`, `Process`, and `Err`
-   must be accessed using getter and setter methods with `puffin.Exec`.
+   must be accessed using getter and setter methods with `puffin.Cmd`.
    This is because interfaces in Go can not export public fields like structs can.
 2) setting `SysProcAttr`, `Process`, `ProcessState`, and `Err` is not possible on a `puffin.Cmd`
    the way it is for an `exec.Cmd` as setters for these fields are not included in the interface.
