@@ -5,7 +5,7 @@ This can be great for testing or for use cases where a simulated shell would be 
 
 # Quick Start
 Puffin is designed to be easy to incoporate into your existing codebase.
-Lets take the following code as an example.
+The following code is an example of how to refactor your code to use puffin.
 
 ```go
 package main
@@ -24,7 +24,7 @@ func main() {
     log.Printf("clean: %v\n", clean)
 }
 
-func branchIsClean() (bool error) {
+func branchIsClean() (bool, error) {
     cmd := exec.Command("git", "status", "--porcelain")
     status, err := cmd.Output()
     if err != nil {
@@ -35,7 +35,7 @@ func branchIsClean() (bool error) {
 }
 ```
 
-This code can be re-written to use Puffin instead of os/exec.
+This code can be re-written to use Puffin instead of Go's os/exec package.
 ```go
 package main
 
@@ -54,7 +54,7 @@ func main() {
     log.Printf("clean: %v\n", clean)
 }
 
-func branchIsClean(exec puffin.Exec) (bool error) {
+func branchIsClean(exec puffin.Exec) (bool, error) {
     cmd := exec.Command("git", "status", "--porcelain")
     status, err := cmd.Output()
     if err != nil {
@@ -65,7 +65,7 @@ func branchIsClean(exec puffin.Exec) (bool error) {
 }
 ```
 
-A few things to note about this new code.
+A few things to note about the refactored code.
 1) We've shadowed the exec package name with a `puffin.Exec` argument.
     This ensures that any code that was using the `os/exec` package previously will now use puffin instead.
 2) Previously, this code was using a package dependency `os/exec`.
@@ -88,44 +88,44 @@ import (
 )
 
 func Test_branchIsClean(t *testing.T) {
-	tests := []struct {
-		name    string
-		cmdFunc puffin.CmdFunc
-		want    bool
-	}{
-		{
-			"is clean",
-			func(fc *puffin.FuncCmd) int {
-				return 0
-			},
-			true,
-		},
-		{
-			"is dirty",
-			func(fc *puffin.FuncCmd) int {
-				fc.Stdout().Write([]byte("M README.md"))
-				return 0
-			},
-			false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			exec := puffin.NewFuncExec(
-				puffin.WithFuncMap(map[string]puffin.CmdFunc{
-					"git": tt.cmdFunc,
-				}),
-			)
-			got, err := branchIsClean(exec)
-			if err != nil {
-				t.Fatalf("branchIsClean() error = %v", err)
-			}
+    tests := []struct {
+        name    string
+        cmdFunc puffin.CmdFunc
+        want    bool
+    }{
+        {
+            "is clean",
+            func(fc *puffin.FuncCmd) int {
+                return 0
+            },
+            true,
+        },
+        {
+            "is dirty",
+            func(fc *puffin.FuncCmd) int {
+                fc.Stdout().Write([]byte("M README.md"))
+                return 0
+            },
+            false,
+        },
+    }
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            exec := puffin.NewFuncExec(
+                puffin.WithFuncMap(map[string]puffin.CmdFunc{
+                    "git": tt.cmdFunc,
+                }),
+            )
+            got, err := branchIsClean(exec)
+            if err != nil {
+                t.Fatalf("branchIsClean() error = %v", err)
+            }
 
-			if got != tt.want {
-				t.Errorf("branchIsClean() = %v, want %v", got, tt.want)
-			}
-		})
-	}
+            if got != tt.want {
+                t.Errorf("branchIsClean() = %v, want %v", got, tt.want)
+            }
+        })
+    }
 }
 ```
 
@@ -140,14 +140,14 @@ The exec interface can be used as a drop in replacement for the `os/exec` packag
 It exposes most of the same functions as that package and can often be used to shadow the `os/exec` package name.
 ```go
 import (
-	"os/exec"
+    "os/exec"
 
-	"github.com/bjatkin/puffin"
+    "github.com/bjatkin/puffin"
 )
 
 func example(exec puffin.Exec) {
-	// this now uses puffin rather than the os/exec import
-    exec.Command("new", "command")k
+    // this now uses puffin rather than the os/exec import
+    exec.Command("new", "command")
 }
 ```
 
@@ -169,3 +169,41 @@ There are a few key differences to be aware of however, mostly dude to the fact 
 2) setting `SysProcAttr`, `Process`, `ProcessState`, and `Err` is not possible on a `puffin.Cmd`
    the way it is for an `exec.Cmd` as setters for these fields are not included in the interface.
    This was done to reduce the size of this interface which is already quite large.
+
+This means that code which sets cmd members such as `Args` or `Dir` must instead use the `SetArgs` or `SetDir` functions.
+The following code provides an example.
+```go
+import "os/exec"
+
+func branchIsClean(dir string) (bool, error) {
+    cmd := exec.Command("git")
+	cmd.Args = append(cmd.Args, "status", "--porcelain")
+	cmd.Dir = dir
+
+    status, err := cmd.Output()
+    if err != nil {
+        return false, err
+    }
+
+    return len(status) == 0, nil
+}
+```
+
+This code must be changed slightly to use the `Args()`, `SetArgs()`, and `SetDir` methods rather than modifing the cmd directly
+
+```go
+import "github.com/bjatkin/puffin"
+
+func branchIsClean(exec puffin.Exec, dir string) (bool, error) {
+    cmd := exec.Command("git")
+	cmd.SetArgs(append(cmd.Args(), "status", "--porcelain"))
+	cmd.SetDir(dir)
+
+    status, err := cmd.Output()
+    if err != nil {
+        return false, err
+    }
+
+    return len(status) == 0, nil
+}
+```
