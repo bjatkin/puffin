@@ -1,0 +1,49 @@
+name: Build
+on: [push]
+
+jobs:
+  Pipeline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    # Setup Go
+    - uses: actions/setup-go@v3
+      with:
+        go-version: '^1.19.0'
+
+    # Get values for cache paths to be used in later steps
+    - id: go-cache-paths
+      run: |
+        echo "::set-output name=go-build::$(go env GOCACHE)"
+
+    # Checkout the latest code
+    - name: Checkout
+      uses: actions/checkout@v2
+
+    # Cache go build cache, used to speedup go test
+    - name: Go Build Cache
+      uses: actions/cache@v2
+      with:
+        path: ${{ steps.go-cache-paths.outputs.go-build }}
+        key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
+
+    # Mount testbin cache
+    - name: Mount testbin cache
+      uses: actions/cache@v2
+      with:
+        path: "./testbin"
+        key: testbin
+
+    # Run Go Lint
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v3
+
+    # Run go tests
+    - name: Run Go Tests
+      run: go test ./... -coverprofile cover.out -timeout 10s
+
+    # Run go build
+    - name: Run Go Build
+      run: go build .
