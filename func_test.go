@@ -411,7 +411,7 @@ func TestFuncCmd_Start(t *testing.T) {
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"test": func(fc *FuncCmd) int {
-							fc.stdout.Write([]byte("test was run"))
+							_, _ = fc.stdout.Write([]byte("test was run"))
 							return 0
 						},
 					},
@@ -585,12 +585,12 @@ func TestFuncCmd_Wait(t *testing.T) {
 
 func TestFuncCmd_Run(t *testing.T) {
 	type fields struct {
-		path     string
-		stdout   io.Writer
-		ctx      context.Context
-		ctxErr   chan error
-		exitCode chan int
-		fExec    *FuncExec
+		path       string
+		stdout     io.Writer
+		ctxTimeout time.Duration
+		ctxErr     chan error
+		exitCode   chan int
+		fExec      *FuncExec
 	}
 	tests := []struct {
 		name      string
@@ -601,20 +601,23 @@ func TestFuncCmd_Run(t *testing.T) {
 		{
 			"canceled command stdout locked",
 			fields{
-				path: "slow",
-				ctx: func() context.Context {
-					ctx, _ := context.WithTimeout(context.Background(), time.Millisecond*5)
-					return ctx
-				}(),
-				exitCode: make(chan int, 1),
-				ctxErr:   make(chan error, 1),
-				stdout:   newLockableBuffer(),
+				path:       "slow",
+				ctxTimeout: time.Millisecond * 5,
+				exitCode:   make(chan int, 1),
+				ctxErr:     make(chan error, 1),
+				stdout:     newLockableBuffer(),
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"slow": func(fc *FuncCmd) int {
-							fc.stdout.Write([]byte("test was run"))
+							_, err := fc.stdout.Write([]byte("test was run"))
+							if err != nil {
+								t.Fatalf("Run() failed to run slow command %v", err)
+							}
 							time.Sleep(time.Millisecond * 10)
-							fc.stdout.Write([]byte("sleep finished"))
+							_, err = fc.stdout.Write([]byte("sleep finished"))
+							if err != nil {
+								t.Fatalf("Run() failed to run slow command %v", err)
+							}
 							return 0
 						},
 					},
@@ -626,14 +629,11 @@ func TestFuncCmd_Run(t *testing.T) {
 		{
 			"uncanceled command",
 			fields{
-				path: "fast",
-				ctx: func() context.Context {
-					ctx, _ := context.WithTimeout(context.Background(), time.Minute)
-					return ctx
-				}(),
-				exitCode: make(chan int, 1),
-				ctxErr:   make(chan error, 1),
-				stdout:   newLockableBuffer(),
+				path:       "fast",
+				ctxTimeout: time.Minute,
+				exitCode:   make(chan int, 1),
+				ctxErr:     make(chan error, 1),
+				stdout:     newLockableBuffer(),
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"fast": func(fc *FuncCmd) int {
@@ -659,7 +659,10 @@ func TestFuncCmd_Run(t *testing.T) {
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"test": func(fc *FuncCmd) int {
-							fc.stdout.Write([]byte("test was run"))
+							_, err := fc.stdout.Write([]byte("test was run"))
+							if err != nil {
+								t.Fatalf("Run() failed to run test command %v", err)
+							}
 							return 1 // no-zero exit code
 						},
 					},
@@ -683,11 +686,18 @@ func TestFuncCmd_Run(t *testing.T) {
 			c := &FuncCmd{
 				path:     tt.fields.path,
 				stdout:   tt.fields.stdout,
-				ctx:      tt.fields.ctx,
+				ctx:      context.Background(),
 				ctxErr:   tt.fields.ctxErr,
 				exitCode: tt.fields.exitCode,
 				fExec:    tt.fields.fExec,
 			}
+			if tt.fields.ctxTimeout != 0 {
+				ctx, cancel := context.WithTimeout(c.ctx, tt.fields.ctxTimeout)
+				defer cancel()
+
+				c.ctx = ctx
+			}
+
 			if err := c.Run(); (err != nil) != tt.wantErr {
 				t.Errorf("FuncCmd.Run() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -731,7 +741,10 @@ func TestFuncCmd_CombinedOutput(t *testing.T) {
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"test": func(fc *FuncCmd) int {
-							fc.stdout.Write([]byte("test was run"))
+							_, err := fc.stdout.Write([]byte("test was run"))
+							if err != nil {
+								t.Fatalf("CombinedOutput() failed to run test command %v", err)
+							}
 							return 0
 						},
 					},
@@ -749,7 +762,10 @@ func TestFuncCmd_CombinedOutput(t *testing.T) {
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"test": func(fc *FuncCmd) int {
-							fc.stderr.Write([]byte("test was run"))
+							_, err := fc.stderr.Write([]byte("test was run"))
+							if err != nil {
+								t.Fatalf("CombinedOutput() failed to run test command %v", err)
+							}
 							return 0
 						},
 					},
@@ -767,8 +783,14 @@ func TestFuncCmd_CombinedOutput(t *testing.T) {
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"test": func(fc *FuncCmd) int {
-							fc.stdout.Write([]byte("test was run"))
-							fc.stderr.Write([]byte("there was an err"))
+							_, err := fc.stdout.Write([]byte("test was run"))
+							if err != nil {
+								t.Fatalf("CombinedOutput() failed to run test command %v", err)
+							}
+							_, err = fc.stderr.Write([]byte("there was an err"))
+							if err != nil {
+								t.Fatalf("CombinedOutput() failed to run test command %v", err)
+							}
 							return 0
 						},
 					},
@@ -888,7 +910,10 @@ func TestFuncCmd_Output(t *testing.T) {
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"test": func(fc *FuncCmd) int {
-							fc.stdout.Write([]byte("test was run"))
+							_, err := fc.stdout.Write([]byte("test was run"))
+							if err != nil {
+								t.Fatalf("Output() failed to run test command %v", err)
+							}
 							return 0
 						},
 					},
@@ -906,7 +931,10 @@ func TestFuncCmd_Output(t *testing.T) {
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"test": func(fc *FuncCmd) int {
-							fc.stderr.Write([]byte("test was run"))
+							_, err := fc.stderr.Write([]byte("test was run"))
+							if err != nil {
+								t.Fatalf("Output() failed to run test command %v", err)
+							}
 							return 1
 						},
 					},
@@ -985,7 +1013,10 @@ func TestFuncCmd_StderrPipe(t *testing.T) {
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"test": func(fc *FuncCmd) int {
-							fc.stderr.Write([]byte("test was run"))
+							_, err := fc.stderr.Write([]byte("test was run"))
+							if err != nil {
+								t.Fatalf("StderrPipe() failed to run test command %v", err)
+							}
 							return 0
 						},
 					},
@@ -1072,7 +1103,10 @@ func TestFuncCmd_StdoutPipe(t *testing.T) {
 				fExec: &FuncExec{
 					funcMap: map[string]CmdFunc{
 						"test": func(fc *FuncCmd) int {
-							fc.stdout.Write([]byte("test was run"))
+							_, err := fc.stdout.Write([]byte("test was run"))
+							if err != nil {
+								t.Fatalf("StdoutPipe() failed to run test command %v", err)
+							}
 							return 0
 						},
 					},
