@@ -13,3 +13,6 @@
 
 # Local testing
 /local
+
+# GoLand
+.idea
