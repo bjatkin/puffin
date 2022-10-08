@@ -14,41 +14,54 @@ import (
 	"syscall"
 )
 
-// PidMax is the defaul max on most linux OS
+// PidMax is the default max on most linux OS
 const PidMax = 32768
 
 // FuncExec is an Exec implementation that uses provided go functions
 // rather than the os/exec package
 type FuncExec struct {
-	funcMap map[string]CmdFunc
-	envs    map[string]string
+	mux  *Mux
+	bins []string
+	envs map[string]string
 }
 
 // NewFuncExec creates a new FuncExec struct
 func NewFuncExec(opts ...FuncExecOption) Exec {
-	exec := &FuncExec{}
+	fExec := &FuncExec{}
 
 	for _, opt := range opts {
-		opt(exec)
+		opt(fExec)
 	}
 
-	return exec
+	return fExec
 }
 
-// Lookpath finds a function in the function map and returns its name.
-// If the funcMap does not contain the named command (or a matching path),
-// an error will be returned
-//
-// commands will be matched by their exact name first and then
-// by a matching file path in random order
+// LookPath always returns the file unless bins is set.
+// if bins is set file will be matched against the provided bins
+// if the file contains a / then it must match a bin exactly
+// otherwise bins are matched to files based on the bins filepath base
 func (e *FuncExec) LookPath(file string) (string, error) {
-	_, found := e.findFunc(file)
-	if found != "" {
-		return found, nil
+	// if bins is not defined always return a match
+	if len(e.bins) == 0 {
+		return file, nil
 	}
 
 	if strings.Contains(file, "/") {
-		return found, &exec.Error{Name: file, Err: &os.PathError{Op: "stat", Path: file, Err: syscall.ENOENT}}
+		for _, p := range e.bins {
+			if file == p {
+				return p, nil
+			}
+		}
+
+		// must be an exact match if there's a / in the path name
+		return "", &exec.Error{Name: file, Err: &os.PathError{Op: "stat", Path: file, Err: syscall.ENOENT}}
+	}
+
+	// otherwise we can just match the name with the filepath base
+	for _, p := range e.bins {
+		if filepath.Base(p) == file {
+			return p, nil
+		}
 	}
 
 	return "", &exec.Error{Name: file, Err: exec.ErrNotFound}
@@ -89,37 +102,29 @@ func (e *FuncExec) CommandContext(ctx context.Context, name string, arg ...strin
 	return cmd
 }
 
-// findFunc retrives a function and the command name from the func map
-func (e *FuncExec) findFunc(name string) (CmdFunc, string) {
-	// dont even need to check the map if it's nil
-	if e.funcMap == nil {
-		return nil, ""
-	}
-
-	// check if it's a simple member of the map
-	if fn, ok := e.funcMap[name]; ok {
-		return fn, name
-	}
-
-	// check if there's a path that matches
-	// e.g. go -> /usr/local/go/bin/go
-	for file, fn := range e.funcMap {
-		if filepath.Base(file) == name {
-			return fn, file
-		}
-	}
-
-	// no match was found
-	return nil, ""
-}
-
 // FuncExecOption can be used to configure the FuncExec struct
 type FuncExecOption func(*FuncExec)
 
 // WithFuncMap sets the func map used by all the commands created by this Exec
 func WithFuncMap(funcs map[string]CmdFunc) FuncExecOption {
 	return func(fExec *FuncExec) {
-		fExec.funcMap = funcs
+		if fExec.mux == nil {
+			fExec.mux = NewMux()
+		}
+		var addLast CmdFunc
+		for key, fn := range funcs {
+			// make sure the catch-all case is the final matcher
+			if key == "*" {
+				addLast = fn
+				continue
+			}
+
+			fExec.mux.HandleFunc(pat(key), fn)
+		}
+
+		if addLast != nil {
+			fExec.mux.HandleFunc(pat("*"), addLast)
+		}
 	}
 }
 
@@ -127,6 +132,23 @@ func WithFuncMap(funcs map[string]CmdFunc) FuncExecOption {
 func WithEnv(envs map[string]string) FuncExecOption {
 	return func(fExec *FuncExec) {
 		fExec.envs = envs
+	}
+}
+
+// WithHandleFunc adds a handle func that will handle all commands
+func WithHandleFunc(fn CmdFunc) FuncExecOption {
+	return func(fExec *FuncExec) {
+		if fExec.mux == nil {
+			fExec.mux = NewMux()
+		}
+		fExec.mux.HandleFunc(pat("*"), fn)
+	}
+}
+
+// WithMux sets a command Mux to the funcExec
+func WithMux(mux *Mux) FuncExecOption {
+	return func(fExec *FuncExec) {
+		fExec.mux = mux
 	}
 }
 
@@ -258,7 +280,7 @@ func (c *FuncCmd) Start() error {
 
 	c.process = &os.Process{Pid: rand.Intn(PidMax)}
 
-	fn, _ := c.fExec.findFunc(c.path)
+	fn := c.fExec.mux.findHandler(c)
 	if fn == nil {
 		c.startErr = errors.New("exit status 1")
 		return nil
