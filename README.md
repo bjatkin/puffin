@@ -1,4 +1,4 @@
-# ⚠️ DEPRICATION NOTICE ⚠️
+# ⚠️ DEPRECATION NOTICE ⚠️
 You should not use this version of Puffin as it is no longer maintained.
 You can find the offical fork [here](https://github.com/weave-lab/puffin).
 This repo is now being maintained by the weave-lab organization.
